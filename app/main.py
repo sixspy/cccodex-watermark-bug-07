@@ -7,13 +7,21 @@ from itsdangerous import BadSignature, URLSafeSerializer
 from app.config import Config
 from app.db import init_db
 from app.services import (
+    capture_snapshot,
+    cards_for_codes,
     get_batch,
     list_batches,
     list_reports,
+    list_tasks,
     list_templates,
+    list_verifications,
+    reconcile_report,
+    report_void_cards,
     run_gap_report,
     stamp_batch,
     trace_downstream,
+    verify_report,
+    void_batch,
 )
 from app.services.errors import ServiceError
 
@@ -174,6 +182,18 @@ async def api_stamp(request: Request):
     return json_response({"ok": True, "batch": batch})
 
 
+@app.router.post("/api/batches/{batch_id}/void")
+async def api_void(request: Request):
+    try:
+        require_user(request)
+        batch_id = int(request.route_values["batch_id"])
+        body = await request.json()
+        batch = void_batch(batch_id, str(body.get("reason", "")))
+    except ServiceError as exc:
+        return json_response({"ok": False, "error": exc.message}, exc.status_code)
+    return json_response({"ok": True, "batch": batch})
+
+
 @app.router.post("/api/trace")
 async def api_trace(request: Request):
     try:
@@ -194,12 +214,94 @@ async def api_gap_list(request: Request):
     return json_response({"items": list_reports()})
 
 
+@app.router.get("/api/gap-reports/context")
+async def api_gap_context(request: Request):
+    """打开缺口对账页时调用：冻结一份作废集合快照，并给出卡片与已出过的数。"""
+    try:
+        require_user(request)
+        snap = capture_snapshot()
+        items = list_reports()
+        cards = cards_for_codes(snap["void_codes"])
+        latest = items[0] if items else None
+        drift = None
+        if latest is not None:
+            drift = sorted(set(latest["void_codes"]) ^ set(snap["void_codes"]))
+        return json_response(
+            {
+                "ok": True,
+                "snapshot": snap,
+                "void_cards": cards,
+                "latest_report": latest,
+                "drift": drift,
+            }
+        )
+    except ServiceError as exc:
+        return json_response({"ok": False, "error": exc.message}, exc.status_code)
+
+
+@app.router.get("/api/gap-reports/{report_id}/void-cards")
+async def api_void_cards(request: Request):
+    try:
+        require_user(request)
+        report_id = int(request.route_values["report_id"])
+        cards = report_void_cards(report_id)
+    except ServiceError as exc:
+        return json_response({"ok": False, "error": exc.message}, exc.status_code)
+    return json_response({"ok": True, "void_cards": cards})
+
+
 @app.router.post("/api/gap-reports")
 async def api_gap_run(request: Request):
     try:
         require_user(request)
+        body = await request.json()
+        reading = str(body.get("reading", "重扫"))
+        snapshot_id = body.get("snapshot_id")
+        report = run_gap_report(
+            str(body.get("as_of_date", "2026-11-16")),
+            reading=reading,
+            snapshot_id=int(snapshot_id) if snapshot_id is not None else None,
+        )
+    except ServiceError as exc:
+        return json_response({"ok": False, "error": exc.message}, exc.status_code)
+    return json_response({"ok": True, "report": report})
+
+
+@app.router.post("/api/gap-reports/{report_id}/reconcile")
+async def api_gap_reconcile(request: Request):
+    try:
+        require_user(request)
+        report_id = int(request.route_values["report_id"])
+        result = reconcile_report(report_id)
+    except ServiceError as exc:
+        return json_response({"ok": False, "error": exc.message}, exc.status_code)
+    return json_response({**result})
+
+
+@app.router.post("/api/gap-reports/{report_id}/verify")
+async def api_gap_verify(request: Request):
+    try:
+        require_user(request)
+        report_id = int(request.route_values["report_id"])
+        result = verify_report(report_id)
+    except ServiceError as exc:
+        return json_response({"ok": False, "error": exc.message}, exc.status_code)
+    return json_response({"ok": True, "verification": result})
+
+
+@app.router.get("/api/verifications")
+async def api_verifications(request: Request):
+    try:
+        require_user(request)
     except ServiceError as exc:
         return json_response({"error": exc.message}, exc.status_code)
-    body = await request.json()
-    report = run_gap_report(str(body.get("as_of_date", "2026-11-16")))
-    return json_response({"ok": True, "report": report})
+    return json_response({"items": list_verifications()})
+
+
+@app.router.get("/api/orchestration-tasks")
+async def api_tasks(request: Request):
+    try:
+        require_user(request)
+    except ServiceError as exc:
+        return json_response({"error": exc.message}, exc.status_code)
+    return json_response({"items": list_tasks()})

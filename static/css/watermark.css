@@ -99,3 +99,62 @@ th { color: var(--muted); font-weight: 500; }
   border: 1px dashed var(--line);
   border-radius: 14px;
 }
+
+/* 差额条 / 读数芯片 / 作废卡片 */
+.gapbin {
+  margin: 0.4rem 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fbfdf7, #f2f7ea);
+}
+.gapbin-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.gapbin-nums {
+  display: flex;
+  gap: 0.35rem 1.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+  font-size: 0.95rem;
+}
+.gapbin-nums b { font-size: 1.15rem; }
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0.6rem 0 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+label.inline input { padding: 0; }
+.chip-read { border: 1px solid transparent; }
+.chip-frozen { background: #dcecff; border-color: #a9c8ea; }
+.chip-rescan { background: #ffe9c7; border-color: #e8c489; }
+.chip-ok { background: #d7f5c2; }
+.chip-bad { background: #ffd6d2; }
+.warn {
+  margin: 0.5rem 0 0;
+  color: #9a5b12;
+  font-size: 0.88rem;
+}
+button.danger { color: var(--danger); border-color: #e3b3ad; }
+tr.picked { background: #f4fae8; }
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.6rem;
+  margin: 0.4rem 0 1rem;
+}
+.vcard {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.65rem 0.8rem;
+  background: #fff;
+  font-size: 0.88rem;
+}
+.vcard-code { font-weight: 700; margin-bottom: 0.2rem; }
+button[disabled] { opacity: 0.6; cursor: progress; }

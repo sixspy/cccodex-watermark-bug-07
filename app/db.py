@@ -8,9 +8,10 @@ from app.config import Config
 def connect(db_path: str | None = None) -> sqlite3.Connection:
     path = db_path or Config.database()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
@@ -45,6 +46,8 @@ CREATE TABLE IF NOT EXISTS run_batches (
   status TEXT NOT NULL CHECK (status IN ('待盖印','已盖印','已作废')),
   watermark_value TEXT,
   stamped_at TEXT,
+  voided_at TEXT,
+  void_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -62,7 +65,46 @@ CREATE TABLE IF NOT EXISTS gap_reports (
   stamped_count INTEGER NOT NULL,
   gap_count INTEGER NOT NULL,
   summary TEXT NOT NULL,
+  seq INTEGER,
+  reading TEXT,
+  void_codes TEXT,
+  void_count INTEGER NOT NULL DEFAULT 0,
+  digest TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS void_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reason TEXT NOT NULL,
+  void_codes TEXT NOT NULL,
+  void_count INTEGER NOT NULL,
+  digest TEXT NOT NULL,
+  captured_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gap_verifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_id INTEGER NOT NULL,
+  round1_gap INTEGER NOT NULL,
+  round2_gap INTEGER NOT NULL,
+  aligned INTEGER NOT NULL,
+  detail TEXT NOT NULL,
+  reading TEXT,
+  seq INTEGER,
+  void_count INTEGER,
+  checked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS orchestration_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_code TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  report_id INTEGER,
+  reading TEXT,
+  seq INTEGER,
+  status TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -91,9 +133,53 @@ SEED_EDGES = [
 ]
 
 
+def _migrate(conn) -> None:
+    """旧库补齐新增列，不清存量数据。"""
+    cols = {
+        r["name"] for r in conn.execute("PRAGMA table_info(run_batches)").fetchall()
+    }
+    for name, ddl in (
+        ("voided_at", "ALTER TABLE run_batches ADD COLUMN voided_at TEXT"),
+        ("void_reason", "ALTER TABLE run_batches ADD COLUMN void_reason TEXT"),
+    ):
+        if name not in cols:
+            conn.execute(ddl)
+    rcols = {
+        r["name"] for r in conn.execute("PRAGMA table_info(gap_reports)").fetchall()
+    }
+    for name, ddl in (
+        ("seq", "ALTER TABLE gap_reports ADD COLUMN seq INTEGER"),
+        ("reading", "ALTER TABLE gap_reports ADD COLUMN reading TEXT"),
+        ("void_codes", "ALTER TABLE gap_reports ADD COLUMN void_codes TEXT"),
+        (
+            "void_count",
+            "ALTER TABLE gap_reports ADD COLUMN void_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("digest", "ALTER TABLE gap_reports ADD COLUMN digest TEXT"),
+    ):
+        if name not in rcols:
+            conn.execute(ddl)
+    vcols = {
+        r["name"] for r in conn.execute("PRAGMA table_info(gap_verifications)").fetchall()
+    }
+    for name, ddl in (
+        ("reading", "ALTER TABLE gap_verifications ADD COLUMN reading TEXT"),
+        ("seq", "ALTER TABLE gap_verifications ADD COLUMN seq INTEGER"),
+        ("void_count", "ALTER TABLE gap_verifications ADD COLUMN void_count INTEGER"),
+    ):
+        if name not in vcols:
+            conn.execute(ddl)
+    # 序号唯一是“两边同时抢重扫不互相盖摘要”的最后一道闸；
+    # 旧库的存量行 seq 为 NULL，SQLite 唯一索引允许多个 NULL。
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_gap_reports_seq ON gap_reports(seq)"
+    )
+
+
 def init_db(db_path: str | None = None) -> None:
     with get_db(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         row = conn.execute("SELECT value FROM meta WHERE key='seeded'").fetchone()
         if row:
             return

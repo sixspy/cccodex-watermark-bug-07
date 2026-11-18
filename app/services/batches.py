@@ -57,3 +57,37 @@ def stamp_batch(
             "SELECT * FROM run_batches WHERE id=?", (batch_id,)
         ).fetchone()
         return dict(row)
+
+
+def void_batch(
+    batch_id: int,
+    reason: str,
+    db_path: str | None = None,
+) -> dict:
+    """作废批次：落作废实物（时间 / 原因），差额出数必须能看到它。"""
+    text = (reason or "").strip()
+    if not text:
+        raise ServiceError("作废原因不能为空")
+    with get_db(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            batch = conn.execute(
+                "SELECT * FROM run_batches WHERE id=?", (batch_id,)
+            ).fetchone()
+            if not batch:
+                raise ServiceError("批次不存在", 404)
+            if batch["status"] == "已作废":
+                raise ServiceError("批次已作废", 409)
+            conn.execute(
+                "UPDATE run_batches SET status='已作废', voided_at=datetime('now'), "
+                "void_reason=? WHERE id=?",
+                (text, batch_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM run_batches WHERE id=?", (batch_id,)
+            ).fetchone()
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return dict(row)
